@@ -17,6 +17,16 @@ import { leadError, LEAD_LIMITS } from "@/lib/lead";
 // send. After this much inactivity, a new visit starts a fresh chat.
 const CONVO_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+function makeConvoId(): string {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+}
+
 type Msg = {
   role: "user" | "assistant";
   content: string;
@@ -763,9 +773,11 @@ export function ChatWidget({
     document.head.appendChild(link);
   }, [config.fontFamily]);
 
-  // Establish the conversation id (client-only) and resume the chat if it's
-  // still within the TTL. Stored in localStorage as {id, ts} so it survives
-  // refreshes, navigations, and tab close/reopen until it goes quiet.
+  // Resume an existing chat if one is still within the TTL. This effect is
+  // READ-ONLY by design: nothing is generated or written to localStorage at
+  // load. The conversation id is created lazily on the visitor's first
+  // message (see send handler), so an idle widget stores nothing on the
+  // visitor's device. That keeps the widget consent-banner friendly.
   useEffect(() => {
     const storeKey = "bv_convo_" + widgetKey;
     let id = "";
@@ -785,26 +797,10 @@ export function ChatWidget({
         }
       }
     } catch {
-      /* storage blocked or malformed; fall through to a fresh id */
+      /* storage blocked or malformed; start fresh on first message */
     }
-    if (!id) {
-      id =
-        typeof crypto !== "undefined" && crypto.randomUUID
-          ? crypto.randomUUID()
-          : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-              const r = (Math.random() * 16) | 0;
-              const v = c === "x" ? r : (r & 0x3) | 0x8;
-              return v.toString(16);
-            });
-    }
-    convoIdRef.current = id;
-    try {
-      localStorage.setItem(storeKey, JSON.stringify({ id, ts: Date.now() }));
-    } catch {
-      /* ignore */
-    }
-
     if (!resume) return;
+    convoIdRef.current = id;
 
     // Pull prior turns so the visitor sees the ongoing chat, not a blank one.
     let cancelled = false;
@@ -923,6 +919,10 @@ export function ChatWidget({
       .map((m) => ({ role: m.role, content: m.content }));
     setMessages((m) => [...m, { role: "user", content: q }]);
     setBusy(true);
+    // First message: mint the conversation id now (not at load). This is the
+    // first time anything is written to the visitor's device, and it happens
+    // on their own action.
+    if (!convoIdRef.current) convoIdRef.current = makeConvoId();
     // Roll the resume window forward so an active chat keeps surviving reloads.
     try {
       localStorage.setItem(
@@ -1332,7 +1332,7 @@ export function ChatWidget({
               <img
                 src={panelIsDark ? "/logowhite-small.png" : "/logoblack-small.png"}
                 alt="Bleviq"
-                style={{ height: 16, width: "auto" }}
+                style={{ height: 20, width: "auto" }}
               />
             </a>
           </span>
